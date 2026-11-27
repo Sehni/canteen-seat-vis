@@ -218,7 +218,6 @@ def main():
     if current_val != st.session_state.time_idx:
         st.session_state.time_idx = current_val
         st.session_state.is_playing = False
-        st.rerun() 
         
     current_step = time_steps[st.session_state.time_idx]
     st.sidebar.info(f"当前时间：**{current_step['time_label']}**")
