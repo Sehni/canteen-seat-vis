@@ -4,6 +4,7 @@ from PIL import Image
 import numpy as np
 import os
 import time
+import io  # 👈 新增：用于在内存中处理图像字节流
 
 # ==========================================
 # 1. 数据解析
@@ -61,7 +62,7 @@ def parse_data(filepath):
     return time_steps
 
 # ==========================================
-# 2. 图像渲染类 (完美的 180 度翻转布局)
+# 2. 图像渲染类 (保持不变)
 # ==========================================
 class Unit:
     def __init__(self, x, y, assets, ax):
@@ -124,13 +125,11 @@ class Editor:
         x_left = np.linspace(-28, -8, 9) 
         x_right = np.linspace(8, 28, 9)  
         
-        # 左区：中间下面开始往左 -> 绕上排回中间
         for x in x_left[::-1]: 
             self.units['left_1'].append(Unit(x=x, y=1, assets=self.assets, ax=self.ax))
         for x in x_left: 
             self.units['left_2'].append(Unit(x=x, y=7, assets=self.assets, ax=self.ax))
             
-        # 右区：中间下面开始往右 -> 绕上排回中间
         for x in x_right: 
             self.units['right_1'].append(Unit(x=x, y=1, assets=self.assets, ax=self.ax))
         for x in x_right[::-1]: 
@@ -173,6 +172,27 @@ def load_images():
     }
 
 # ==========================================
+# 🌟 新增核心优化：预渲染并缓存每一帧的图片字节流
+# ==========================================
+@st.cache_data(show_spinner=False)
+def render_frame_to_image(time_idx, step_data):
+    """渲染单帧并直接返回 PNG 字节流，缓存后实现 0 延迟响应"""
+    assets = load_images()
+    editor = Editor(assets)
+    editor.update_state(step_data)
+    
+    # 将 Matplotlib 画布保存到内存中
+    buf = io.BytesIO()
+    # bbox_inches='tight' 去除周围白边
+    editor.fig.savefig(buf, format="png", transparent=True, bbox_inches='tight', pad_inches=0.1, dpi=120)
+    buf.seek(0)
+    
+    # 渲染完必须关闭 fig，否则会导致内存泄漏
+    plt.close(editor.fig)
+    
+    return buf.getvalue()
+
+# ==========================================
 # 4. Streamlit 页面与丝滑播放引擎
 # ==========================================
 def main():
@@ -187,39 +207,35 @@ def main():
         st.error(f"数据读取失败：{e}。")
         return
 
-    # --- 1. 状态初始化 ---
     if 'time_idx' not in st.session_state:
         st.session_state.time_idx = 0
     if 'is_playing' not in st.session_state:
         st.session_state.is_playing = False
 
-    # --- 2. 自动播放引擎 (放在渲染控件前，完美避开冲突) ---
+    # 自动播放引擎
     if st.session_state.is_playing:
         if st.session_state.time_idx < len(time_steps) - 1:
-            time.sleep(1.0)  # 播放间隔
+            time.sleep(1.0) 
             st.session_state.time_idx += 1
             st.rerun()
         else:
             st.session_state.is_playing = False
             st.rerun()
 
-    # --- 3. 回调函数：用户拖拽时触发 ---
     def pause_playback():
         st.session_state.is_playing = False
 
-    # --- 4. 渲染侧边栏 ---
     st.sidebar.header("控制面板")
     
     play_btn_text = "⏸️ 暂停播放" if st.session_state.is_playing else "▶️ 开始播放"
     st.sidebar.button(play_btn_text, on_click=lambda: st.session_state.update(is_playing=not st.session_state.is_playing), use_container_width=True)
     
-    # 👇 绑定 key 和 on_change，彻底摆脱手动同步
     st.sidebar.slider(
         "拖动查看时间点", 
         min_value=0, 
         max_value=len(time_steps)-1, 
-        key="time_idx",          # 绑定给 key
-        on_change=pause_playback # 拖拽时自动暂停播放
+        key="time_idx",          
+        on_change=pause_playback 
     )
         
     current_step = time_steps[st.session_state.time_idx]
@@ -231,11 +247,12 @@ def main():
     st.sidebar.markdown("- 🔴 有人：1（有人）")
     st.sidebar.markdown("- 🟡 物品：2（有物品）")
     
-    # --- 5. 渲染画面 ---
-    assets = load_images()
-    editor = Editor(assets)
-    editor.update_state(current_step)
-    st.pyplot(editor.fig)
+    # 🌟 直接使用缓存好的图片字节流进行展示
+    # 第一次运行会稍微卡顿（生成5张缓存图），之后无论怎么拖拽/播放，都是瞬间刷新！
+    with st.spinner("正在生成/加载图像..."):
+        img_bytes = render_frame_to_image(st.session_state.time_idx, current_step)
+    
+    st.image(img_bytes, use_container_width=True)
 
 if __name__ == "__main__":
     main()
