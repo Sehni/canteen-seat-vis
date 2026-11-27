@@ -191,9 +191,9 @@ def main():
     st.title("🍽️ 食堂座位状态监控 (12:12 - 12:32)")
     
     try:
-        time_steps = parse_data("data1-11.25.txt")
+        time_steps = parse_data("data/data1-11.25.txt")
     except FileNotFoundError:
-        st.error("找不到数据文件！请确保 `data1-11.25.txt` 和代码在同一目录下。")
+        st.error("找不到数据文件！")
         return
 
     labels = [t['time_label'] for t in time_steps]
