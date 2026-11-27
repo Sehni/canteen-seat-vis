@@ -62,15 +62,19 @@ def parse_data(filepath):
     return time_steps
 
 # ==========================================
-# 2. 图像渲染类
+# 2. 图像渲染类 (放大尺寸，计算防重叠)
 # ==========================================
 class Unit:
     def __init__(self, x, y, assets, ax):
         self.x, self.y = x, y
         self.ax = ax
         self.assets = assets
-        self.desk_w = 2.2      
-        self.seat_w = 0.8      
+        
+        # 🌟 核心调整：放大桌子(2.4)和座位(1.0)
+        # 因为相邻桌子中心距是 2.5，宽 2.4 刚好留出 0.1 的缝隙
+        self.desk_w = 2.4      
+        self.seat_w = 1.0      
+        
         self.load_desk()
         self.load_seat()
         
@@ -81,6 +85,7 @@ class Unit:
         
     def load_seat(self):
         self.seat = []
+        # offset 设为桌子的 1/4 (0.6)，让四个座位完美均分在四个象限
         offset = self.desk_w / 4.0  
         directions = [(-1, 1), (-1, -1), (1, -1), (1, 1)] 
         
@@ -122,6 +127,7 @@ class Editor:
         self.create_layout()
 
     def create_layout(self):
+        # np.linspace(-28, -8, 9) 意味着 x 坐标以 2.5 为步长递增
         x_left = np.linspace(-28, -8, 9) 
         x_right = np.linspace(8, 28, 9)  
         
@@ -197,9 +203,6 @@ def main():
         st.error(f"数据读取失败：{e}。")
         return
 
-    # ==========================================
-    # 步骤 1：状态初始化与 UI 状态同步
-    # ==========================================
     if 'current_idx' not in st.session_state:
         st.session_state.current_idx = 0
     if 'is_playing' not in st.session_state:
@@ -207,14 +210,10 @@ def main():
     if 'slider_key' not in st.session_state:
         st.session_state.slider_key = 0
 
-    # 🌟 核心补丁：如果是自动播放引擎在上一轮修改了 idx，我们需要在渲染滑块前，强制同步滑块的值
     if st.session_state.get('auto_step', False):
         st.session_state.slider_key = st.session_state.current_idx
         st.session_state.auto_step = False
 
-    # ==========================================
-    # 步骤 2：集中缓存渲染（只在首次启动时执行）
-    # ==========================================
     if 'all_images' not in st.session_state:
         st.info("正在初始化渲染引擎，请稍候...")
         progress_bar = st.progress(0, text="正在生成图像...")
@@ -229,9 +228,6 @@ def main():
         progress_bar.empty()  
         st.rerun()  
 
-    # ==========================================
-    # 步骤 3：渲染侧边栏 UI
-    # ==========================================
     st.sidebar.header("控制面板")
     
     play_btn_text = "⏸️ 暂停播放" if st.session_state.is_playing else "▶️ 开始播放"
@@ -241,7 +237,6 @@ def main():
         use_container_width=True
     )
     
-    # 绑定一个独立的 key="slider_key"
     st.sidebar.slider(
         "拖动查看时间点", 
         min_value=0, 
@@ -249,10 +244,9 @@ def main():
         key="slider_key"
     )
 
-    # 如果滑块的值（用户拖动导致）与底层的 current_idx 不一致，说明用户手动干预了
     if st.session_state.slider_key != st.session_state.current_idx:
         st.session_state.current_idx = st.session_state.slider_key
-        st.session_state.is_playing = False  # 用户拖动时强制暂停播放
+        st.session_state.is_playing = False
 
     current_step = time_steps[st.session_state.current_idx]
     st.sidebar.info(f"当前时间：**{current_step['time_label']}**")
@@ -263,19 +257,13 @@ def main():
     st.sidebar.markdown("- 🔴 有人：1（有人）")
     st.sidebar.markdown("- 🟡 物品：2（有物品）")
 
-    # ==========================================
-    # 步骤 4：展示渲染好的图片
-    # ==========================================
     st.image(st.session_state.all_images[st.session_state.current_idx], use_container_width=True)
 
-    # ==========================================
-    # 步骤 5：自动播放引擎（必须在所有 UI 渲染之后执行，否则画面不会刷新）
-    # ==========================================
     if st.session_state.is_playing:
         if st.session_state.current_idx < len(time_steps) - 1:
-            time.sleep(1.0)  # 播放间隔
+            time.sleep(1.0) 
             st.session_state.current_idx += 1
-            st.session_state.auto_step = True  # 打上标记，告诉下一轮循环这是自动步进
+            st.session_state.auto_step = True
             st.rerun()
         else:
             st.session_state.is_playing = False
