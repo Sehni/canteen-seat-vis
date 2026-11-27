@@ -61,7 +61,7 @@ def parse_data(filepath):
     return time_steps
 
 # ==========================================
-# 2. 图像渲染类 (精准匹配物理遍历顺序)
+# 2. 图像渲染类 (完美的 180 度翻转布局)
 # ==========================================
 class Unit:
     def __init__(self, x, y, assets, ax):
@@ -81,7 +81,6 @@ class Unit:
     def load_seat(self):
         self.seat = []
         offset = self.desk_w / 4.0  
-        # 座位顺序：左上, 左下, 右下, 右上 (严格按照你最初的数据采集顺序)
         directions = [(-1, 1), (-1, -1), (1, -1), (1, 1)] 
         
         for dx, dy in directions:
@@ -122,37 +121,28 @@ class Editor:
         self.create_layout()
 
     def create_layout(self):
-        # 物理坐标排布
-        x_left = np.linspace(-28, -8, 9)  # 左边从墙到中间 (-28 -> -8)
-        x_right = np.linspace(8, 28, 9)   # 右边从中间到墙 (8 -> 28)
+        x_left = np.linspace(-28, -8, 9) 
+        x_right = np.linspace(8, 28, 9)  
         
-        # ================= 左区 =================
-        # 数据第一行 left_1：从中间下面开始向左走 -> 对应 x_left 倒序 (-8 -> -28)
+        # 左区：中间下面开始往左 -> 绕上排回中间
         for x in x_left[::-1]: 
             self.units['left_1'].append(Unit(x=x, y=1, assets=self.assets, ax=self.ax))
-            
-        # 数据第二行 left_2：绕到上面一排回到中间 -> 对应 x_left 正序 (-28 -> -8)
         for x in x_left: 
             self.units['left_2'].append(Unit(x=x, y=7, assets=self.assets, ax=self.ax))
             
-        # ================= 右区 =================
-        # 数据第一行 right_1：从中间下面开始向右走 -> 对应 x_right 正序 (8 -> 28)
+        # 右区：中间下面开始往右 -> 绕上排回中间
         for x in x_right: 
             self.units['right_1'].append(Unit(x=x, y=1, assets=self.assets, ax=self.ax))
-            
-        # 数据第二行 right_2：绕到上面一排回到中间 -> 对应 x_right 倒序 (28 -> 8)
         for x in x_right[::-1]: 
             self.units['right_2'].append(Unit(x=x, y=7, assets=self.assets, ax=self.ax))
 
     def update_state(self, step_data):
-        # 现在 units 里面保存的顺序，已经完全和 step_data 的数组顺序一一对应
         mapping = {
             'left_1':  step_data['left_1'], 
             'left_2':  step_data['left_2'], 
             'right_1': step_data['right_1'], 
             'right_2': step_data['right_2']
         }
-        
         for key, data_array in mapping.items():
             units_list = self.units[key]
             for i, unit in enumerate(units_list):
@@ -183,7 +173,7 @@ def load_images():
     }
 
 # ==========================================
-# 4. Streamlit 页面与播放逻辑
+# 4. Streamlit 页面与丝滑播放引擎
 # ==========================================
 def main():
     st.set_page_config(page_title="食堂座位状态监控", layout="wide")
@@ -197,27 +187,40 @@ def main():
         st.error(f"数据读取失败：{e}。")
         return
 
+    # --- 1. 状态初始化 ---
     if 'time_idx' not in st.session_state:
         st.session_state.time_idx = 0
     if 'is_playing' not in st.session_state:
         st.session_state.is_playing = False
 
+    # --- 2. 自动播放引擎 (放在渲染控件前，完美避开冲突) ---
+    if st.session_state.is_playing:
+        if st.session_state.time_idx < len(time_steps) - 1:
+            time.sleep(1.0)  # 播放间隔
+            st.session_state.time_idx += 1
+            st.rerun()
+        else:
+            st.session_state.is_playing = False
+            st.rerun()
+
+    # --- 3. 回调函数：用户拖拽时触发 ---
+    def pause_playback():
+        st.session_state.is_playing = False
+
+    # --- 4. 渲染侧边栏 ---
     st.sidebar.header("控制面板")
     
     play_btn_text = "⏸️ 暂停播放" if st.session_state.is_playing else "▶️ 开始播放"
     st.sidebar.button(play_btn_text, on_click=lambda: st.session_state.update(is_playing=not st.session_state.is_playing), use_container_width=True)
     
-    current_val = st.sidebar.slider(
+    # 👇 绑定 key 和 on_change，彻底摆脱手动同步
+    st.sidebar.slider(
         "拖动查看时间点", 
         min_value=0, 
         max_value=len(time_steps)-1, 
-        value=st.session_state.time_idx, 
-        format="第 %d 个时间点"
+        key="time_idx",          # 绑定给 key
+        on_change=pause_playback # 拖拽时自动暂停播放
     )
-    
-    if current_val != st.session_state.time_idx:
-        st.session_state.time_idx = current_val
-        st.session_state.is_playing = False
         
     current_step = time_steps[st.session_state.time_idx]
     st.sidebar.info(f"当前时间：**{current_step['time_label']}**")
@@ -228,19 +231,11 @@ def main():
     st.sidebar.markdown("- 🔴 有人：1（有人）")
     st.sidebar.markdown("- 🟡 物品：2（有物品）")
     
+    # --- 5. 渲染画面 ---
     assets = load_images()
     editor = Editor(assets)
     editor.update_state(current_step)
     st.pyplot(editor.fig)
-    
-    if st.session_state.is_playing:
-        if st.session_state.time_idx < len(time_steps) - 1:
-            time.sleep(1.5) 
-            st.session_state.time_idx += 1
-            st.rerun()       
-        else:
-            st.session_state.is_playing = False
-            st.rerun()
 
 if __name__ == "__main__":
     main()
