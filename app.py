@@ -62,7 +62,7 @@ def parse_data(filepath):
     return time_steps
 
 # ==========================================
-# 2. 图像渲染类 (保持不变)
+# 2. 图像渲染类
 # ==========================================
 class Unit:
     def __init__(self, x, y, assets, ax):
@@ -125,11 +125,13 @@ class Editor:
         x_left = np.linspace(-28, -8, 9) 
         x_right = np.linspace(8, 28, 9)  
         
+        # 左区：中间下面开始往左 -> 绕上排回中间
         for x in x_left[::-1]: 
             self.units['left_1'].append(Unit(x=x, y=1, assets=self.assets, ax=self.ax))
         for x in x_left: 
             self.units['left_2'].append(Unit(x=x, y=7, assets=self.assets, ax=self.ax))
             
+        # 右区：中间下面开始往右 -> 绕上排回中间
         for x in x_right: 
             self.units['right_1'].append(Unit(x=x, y=1, assets=self.assets, ax=self.ax))
         for x in x_right[::-1]: 
@@ -150,7 +152,7 @@ class Editor:
                     unit.shift(seat_idx, seat_states[seat_idx])
 
 # ==========================================
-# 3. 缓存图片加载
+# 3. 图片与渲染缓存
 # ==========================================
 @st.cache_resource
 def load_images():
@@ -171,7 +173,6 @@ def load_images():
         'person': load_image("assets/有人.png")
     }
 
-# 单帧渲染函数，带有缓存
 @st.cache_data(show_spinner=False)
 def render_single_frame(time_idx, step_data):
     assets = load_images()
@@ -180,7 +181,7 @@ def render_single_frame(time_idx, step_data):
     
     buf = io.BytesIO()
     editor.fig.savefig(buf, format="png", transparent=True, bbox_inches='tight', pad_inches=0.1, dpi=120)
-    plt.close(editor.fig) # 及时释放内存
+    plt.close(editor.fig) 
     buf.seek(0)
     return buf.getvalue()
 
@@ -198,13 +199,14 @@ def main():
         st.error(f"数据读取失败：{e}。")
         return
 
-    if 'time_idx' not in st.session_state:
-        st.session_state.time_idx = 0
+    # 初始化状态管理
+    if 'current_idx' not in st.session_state:
+        st.session_state.current_idx = 0
     if 'is_playing' not in st.session_state:
         st.session_state.is_playing = False
 
     # ==========================================
-    # 🌟 核心：启动时集中渲染所有图片并展示进度条
+    # 启动时集中渲染（带进度条）
     # ==========================================
     if 'all_images' not in st.session_state:
         st.info("正在初始化渲染引擎，请稍候...")
@@ -212,29 +214,25 @@ def main():
         
         images_cache = []
         for i, step in enumerate(time_steps):
-            # 调用缓存的单帧渲染（第一次运行会真正画图，之后哪怕重启程序也是秒读缓存）
             img_bytes = render_single_frame(i, step)
             images_cache.append(img_bytes)
             progress_bar.progress((i + 1) / len(time_steps), text=f"正在生成第 {i+1}/{len(time_steps)} 帧...")
             
         st.session_state.all_images = images_cache
-        progress_bar.empty()  # 加载完毕后移除进度条
-        st.rerun()  # 刷新界面进入主程序
+        progress_bar.empty()  
+        st.rerun()  
 
     # ==========================================
-    # 自动播放引擎
+    # 自动播放引擎 (放在渲染滑块之前)
     # ==========================================
     if st.session_state.is_playing:
-        if st.session_state.time_idx < len(time_steps) - 1:
+        if st.session_state.current_idx < len(time_steps) - 1:
             time.sleep(1.0) 
-            st.session_state.time_idx += 1
+            st.session_state.current_idx += 1
             st.rerun()
         else:
             st.session_state.is_playing = False
             st.rerun()
-
-    def pause_playback():
-        st.session_state.is_playing = False
 
     # ==========================================
     # 侧边栏 UI
@@ -244,15 +242,20 @@ def main():
     play_btn_text = "⏸️ 暂停播放" if st.session_state.is_playing else "▶️ 开始播放"
     st.sidebar.button(play_btn_text, on_click=lambda: st.session_state.update(is_playing=not st.session_state.is_playing), use_container_width=True)
     
-    st.sidebar.slider(
+    # 巧妙解法：不绑定 key，而是直接接收滑块的返回值
+    slider_val = st.sidebar.slider(
         "拖动查看时间点", 
         min_value=0, 
         max_value=len(time_steps)-1, 
-        key="time_idx",          
-        on_change=pause_playback 
+        value=st.session_state.current_idx
     )
-        
-    current_step = time_steps[st.session_state.time_idx]
+    
+    # 如果滑块返回的值和后台当前记录的值不一致，说明用户手动拖动了
+    if slider_val != st.session_state.current_idx:
+        st.session_state.current_idx = slider_val
+        st.session_state.is_playing = False  # 打断播放
+
+    current_step = time_steps[st.session_state.current_idx]
     st.sidebar.info(f"当前时间：**{current_step['time_label']}**")
     
     st.sidebar.markdown("---")
@@ -262,9 +265,9 @@ def main():
     st.sidebar.markdown("- 🟡 物品：2（有物品）")
 
     # ==========================================
-    # 🌟 直接展示内存里的图片，彻底告别绘图耗时
+    # 读取缓存并展示
     # ==========================================
-    st.image(st.session_state.all_images[st.session_state.time_idx], use_container_width=True)
+    st.image(st.session_state.all_images[st.session_state.current_idx], use_container_width=True)
 
 if __name__ == "__main__":
     main()
