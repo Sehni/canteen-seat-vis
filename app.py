@@ -4,7 +4,7 @@ from PIL import Image
 import numpy as np
 import os
 import time
-import io  # 👈 新增：用于在内存中处理图像字节流
+import io
 
 # ==========================================
 # 1. 数据解析
@@ -171,36 +171,27 @@ def load_images():
         'person': load_image("assets/有人.png")
     }
 
-# ==========================================
-# 🌟 新增核心优化：预渲染并缓存每一帧的图片字节流
-# ==========================================
+# 单帧渲染函数，带有缓存
 @st.cache_data(show_spinner=False)
-def render_frame_to_image(time_idx, step_data):
-    """渲染单帧并直接返回 PNG 字节流，缓存后实现 0 延迟响应"""
+def render_single_frame(time_idx, step_data):
     assets = load_images()
     editor = Editor(assets)
     editor.update_state(step_data)
     
-    # 将 Matplotlib 画布保存到内存中
     buf = io.BytesIO()
-    # bbox_inches='tight' 去除周围白边
     editor.fig.savefig(buf, format="png", transparent=True, bbox_inches='tight', pad_inches=0.1, dpi=120)
+    plt.close(editor.fig) # 及时释放内存
     buf.seek(0)
-    
-    # 渲染完必须关闭 fig，否则会导致内存泄漏
-    plt.close(editor.fig)
-    
     return buf.getvalue()
 
 # ==========================================
-# 4. Streamlit 页面与丝滑播放引擎
+# 4. Streamlit 主程序
 # ==========================================
 def main():
     st.set_page_config(page_title="食堂座位状态监控", layout="wide")
     st.title("🍽️ 食堂座位状态监控")
     
     file_path = os.path.join("data", "data1-11.25.txt")
-    
     try:
         time_steps = parse_data(file_path)
     except Exception as e:
@@ -212,7 +203,27 @@ def main():
     if 'is_playing' not in st.session_state:
         st.session_state.is_playing = False
 
+    # ==========================================
+    # 🌟 核心：启动时集中渲染所有图片并展示进度条
+    # ==========================================
+    if 'all_images' not in st.session_state:
+        st.info("正在初始化渲染引擎，请稍候...")
+        progress_bar = st.progress(0, text="正在生成图像...")
+        
+        images_cache = []
+        for i, step in enumerate(time_steps):
+            # 调用缓存的单帧渲染（第一次运行会真正画图，之后哪怕重启程序也是秒读缓存）
+            img_bytes = render_single_frame(i, step)
+            images_cache.append(img_bytes)
+            progress_bar.progress((i + 1) / len(time_steps), text=f"正在生成第 {i+1}/{len(time_steps)} 帧...")
+            
+        st.session_state.all_images = images_cache
+        progress_bar.empty()  # 加载完毕后移除进度条
+        st.rerun()  # 刷新界面进入主程序
+
+    # ==========================================
     # 自动播放引擎
+    # ==========================================
     if st.session_state.is_playing:
         if st.session_state.time_idx < len(time_steps) - 1:
             time.sleep(1.0) 
@@ -225,6 +236,9 @@ def main():
     def pause_playback():
         st.session_state.is_playing = False
 
+    # ==========================================
+    # 侧边栏 UI
+    # ==========================================
     st.sidebar.header("控制面板")
     
     play_btn_text = "⏸️ 暂停播放" if st.session_state.is_playing else "▶️ 开始播放"
@@ -246,13 +260,11 @@ def main():
     st.sidebar.markdown("- ⚪ 空位：0（空）")
     st.sidebar.markdown("- 🔴 有人：1（有人）")
     st.sidebar.markdown("- 🟡 物品：2（有物品）")
-    
-    # 🌟 直接使用缓存好的图片字节流进行展示
-    # 第一次运行会稍微卡顿（生成5张缓存图），之后无论怎么拖拽/播放，都是瞬间刷新！
-    with st.spinner("正在生成/加载图像..."):
-        img_bytes = render_frame_to_image(st.session_state.time_idx, current_step)
-    
-    st.image(img_bytes, use_container_width=True)
+
+    # ==========================================
+    # 🌟 直接展示内存里的图片，彻底告别绘图耗时
+    # ==========================================
+    st.image(st.session_state.all_images[st.session_state.time_idx], use_container_width=True)
 
 if __name__ == "__main__":
     main()
